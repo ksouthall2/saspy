@@ -17,6 +17,7 @@ import fcntl
 import os
 import signal
 import subprocess
+import getpass
 from time import sleep
 
 import saspy.sascfg as sascfg
@@ -24,8 +25,6 @@ import saspy.sascfg as sascfg
 
 class SASconfig:
     def __init__(self, cfgname='', kernel=None, saspath='', options=''):
-        # import pdb; pdb.set_trace()
-
         self.configs = []
         self._kernel = kernel
         self.saspath = saspath
@@ -198,11 +197,10 @@ class SASsession:
             self.pid = None
         return rc
 
-    def submit(self, code, results="html"):
+    def submit(self, code, results="html", prompt={}):
         odsopen = b"ods listing close;ods html5 file=stdout options(bitmap_mode='inline') device=png; ods graphics on / outputfmt=png;\n"
         odsclose = b"ods html5 close;ods listing;\n"
         ods = True
-        htm = "html HTML"
         mj = b";*\';*\";*/;"
         lstf = '' 
         logf = '' 
@@ -213,8 +211,11 @@ class SASsession:
         logn = self._logcnt()
         logcodei = "%put E3969440A681A24088859985" + logn + ";"
         logcodeo = "\nE3969440A681A24088859985" + logn
+        pcodei   = ''
+        pcodeo   = ''
 
         if self.pid is None:
+            print("No SAS process attached. SAS process has terminated unexpectedly.")
             return dict(LOG="No SAS process attached. SAS process has terminated unexpectedly.", LST='')
 
         rc = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG)
@@ -222,13 +223,29 @@ class SASsession:
             self.pid = None
             return dict(LOG='SAS process has terminated unexpectedly. Pid State= ' + str(rc), LST='')
 
-        if htm.find(results) < 0:
+        if results.upper() != "HTML":
             ods = False
+
+        if len(prompt):
+           pcodei += 'options nosource nonotes;\n'
+           pcodeo += 'options nosource nonotes;\n'
+           for key in prompt:
+              gotit = False
+              while not gotit:
+                 var = self.sascfg._prompt('Please enter value for macro variable '+key+' ', pw=prompt[key])
+                 if len(var) > 0:
+                    gotit = True
+                 else:
+                    print("Sorry, didn't get a value for that variable.")
+              pcodei += '%let '+key+'='+var+';\n'
+              pcodeo += '%symdel '+key+';\n'
+           pcodei += 'options source notes;\n'
+           pcodeo += 'options source notes;\n'
 
         if ods:
             self.stdin.write(odsopen)
 
-        out = self.stdin.write(mj + b'\n' + code.encode() + b'\n' + mj)
+        out = self.stdin.write(mj+b'\n'+pcodei.encode()+code.encode()+b'\n'+pcodeo.encode()+b'\n'+mj)
 
         if ods:
             self.stdin.write(odsclose)
